@@ -9,181 +9,166 @@ import java.awt.image.BufferedImage;
 import main.GamePanel;
 import utility.LoadImage;
 
-/**
- * A tracking hornet with:
- *  - 4 directional sprites (left/right/up/down), 12 frames each
- *  - float speed for subtle acceleration
- *  - 3 states: PATROL (circles spawn) → ALERTED (! flash) → CHASE (hunt player)
- *  - Loses interest when player escapes beyond LOSE_RANGE tiles
- */
 public class HornetEnemy extends Entity {
 
     GamePanel gp;
 
-    // ── Sprite cache (static — shared across all hornet instances) ────────
-    private static BufferedImage[] framesRight = null;
-    private static BufferedImage[] framesLeft  = null;
-    private static BufferedImage[] framesUp    = null;
-    private static BufferedImage[] framesDown  = null;
-    private static final int FRAME_COUNT = 12;
+    // ── 8-direction sprite cache (static — loaded once) ───────────────────
+    private static BufferedImage[] frRight = null;
+    private static BufferedImage[] frLeft  = null;
+    private static final int FC = 12;
 
-    // ── Float speed override (Entity.Speed is int, we shadow it) ─────────
+    // ── Float speed ───────────────────────────────────────────────────────
     private float fSpeed;
     private static final float PATROL_SPEED = 0.8f;
-    private static final float CHASE_SPEED  = 0.75f; // slightly slower than player (1.0f)  // noticeably faster than dragonfly
+    private static final float CHASE_SPEED  = 0.75f;
 
-    // ── View ranges (in tiles) ────────────────────────────────────────────
+    // ── View ranges ───────────────────────────────────────────────────────
     private static final int VIEW_TILES = 7;
     private static final int LOSE_TILES = 10;
 
     // ── States ────────────────────────────────────────────────────────────
     private enum State { PATROL, ALERTED, CHASE }
     private State state = State.PATROL;
-
-    // Alert flash timer
     private int alertTimer = 0;
-    private static final int ALERT_DURATION = 100; // frames at 200fps ≈ 0.5s
+    private static final int ALERT_DURATION = 100;
 
-    // Accumulated sub-pixel movement
+    // ── Sub-pixel accumulator for smooth float movement ───────────────────
     private float accumX = 0, accumY = 0;
 
-    // Spawn position for patrol circle
-    private final int spawnX, spawnY;
+    // ── Current 8-dir label (used for sprite selection) ───────────────────
+    private String dir8 = "right";
 
     public HornetEnemy(GamePanel gp, int tileX, int tileY) {
         this.gp     = gp;
         this.worldX = gp.tileSize * tileX;
         this.worldY = gp.tileSize * tileY;
-        this.spawnX = worldX;
-        this.spawnY = worldY;
         this.fSpeed = PATROL_SPEED;
-        this.Speed  = 1; // Entity.Speed used by collision checker
+        this.Speed  = 1;
+        this.direction = "left"; // used by collision checker
 
         solidArea = new java.awt.Rectangle(10, 10, 44, 44);
         solidAreaDefaultX = solidArea.x;
         solidAreaDefaultY = solidArea.y;
 
-        // Load frames once
-        if (framesRight == null) {
-            framesRight = new BufferedImage[FRAME_COUNT];
-            framesLeft  = new BufferedImage[FRAME_COUNT];
-            framesUp    = new BufferedImage[FRAME_COUNT];
-            framesDown  = new BufferedImage[FRAME_COUNT];
-            for (int i = 0; i < FRAME_COUNT; i++) {
-                framesRight[i] = scale(LoadImage.load("/hornet/hornet_right_" + (i+1) + ".png"));
-                framesLeft[i]  = scale(LoadImage.load("/hornet/hornet_left_"  + (i+1) + ".png"));
-                framesUp[i]    = scale(LoadImage.load("/hornet/hornet_up_"    + (i+1) + ".png"));
-                framesDown[i]  = scale(LoadImage.load("/hornet/hornet_down_"  + (i+1) + ".png"));
-            }
+        if (frRight == null) {
+            frRight = load("left");   // sprites are mirrored — swap to correct
+            frLeft  = load("right");
         }
     }
 
-    private BufferedImage scale(BufferedImage src) {
-        if (src == null) return null;
+    private BufferedImage[] load(String d) {
+        BufferedImage[] arr = new BufferedImage[FC];
         int s = gp.tileSize;
-        BufferedImage out = new BufferedImage(s, s, BufferedImage.TYPE_INT_ARGB);
-        java.awt.Graphics2D g2 = out.createGraphics();
-        g2.setRenderingHint(RenderingHints.KEY_INTERPOLATION,
-                            RenderingHints.VALUE_INTERPOLATION_BILINEAR);
-        g2.drawImage(src, 0, 0, s, s, null);
-        g2.dispose();
-        return out;
+        for (int i = 0; i < FC; i++) {
+            BufferedImage raw = LoadImage.load("/hornet/hornet_" + d + "_" + (i+1) + ".png");
+            if (raw == null) continue;
+            BufferedImage scaled = new BufferedImage(s, s, BufferedImage.TYPE_INT_ARGB);
+            java.awt.Graphics2D g2 = scaled.createGraphics();
+            g2.setRenderingHint(RenderingHints.KEY_INTERPOLATION,
+                                RenderingHints.VALUE_INTERPOLATION_BILINEAR);
+            g2.drawImage(raw, 0, 0, s, s, null);
+            g2.dispose();
+            arr[i] = scaled;
+        }
+        return arr;
+    }
+
+    // ── Direction: only left or right based on horizontal component ────────
+    private String toDir8(float dx, float dy) {
+        return dx >= 0 ? "right" : "left";
     }
 
     public void update() {
         int ts = gp.tileSize;
 
         // Player centre
-        int px = gp.player.worldX + gp.player.solidArea.x + gp.player.solidArea.width  / 2;
-        int py = gp.player.worldY + gp.player.solidArea.y + gp.player.solidArea.height / 2;
-        int ex = worldX + solidArea.x + solidArea.width  / 2;
-        int ey = worldY + solidArea.y + solidArea.height / 2;
+        float px = gp.player.worldX + gp.player.solidArea.x + gp.player.solidArea.width  / 2f;
+        float py = gp.player.worldY + gp.player.solidArea.y + gp.player.solidArea.height / 2f;
+        float ex = worldX + solidArea.x + solidArea.width  / 2f;
+        float ey = worldY + solidArea.y + solidArea.height / 2f;
 
-        double dist = Math.sqrt((px-ex)*(px-ex) + (py-ey)*(py-ey));
+        float rawDx = px - ex;
+        float rawDy = py - ey;
+        double dist = Math.sqrt(rawDx * rawDx + rawDy * rawDy);
 
-        // ── State machine ────────────────────────────────────────────────
+        // ── State machine ─────────────────────────────────────────────────
         switch (state) {
             case PATROL:
                 if (dist < VIEW_TILES * ts) {
-                    state      = State.ALERTED;
+                    state = State.ALERTED;
                     alertTimer = 0;
-                    fSpeed     = 0.3f; // slow but never fully frozen
+                    fSpeed = 0.3f;
                 }
                 break;
             case ALERTED:
-                alertTimer++;
-                if (alertTimer >= ALERT_DURATION) {
+                if (++alertTimer >= ALERT_DURATION) {
                     state  = State.CHASE;
-                    fSpeed = PATROL_SPEED; // start slow then accelerate
+                    fSpeed = 0;
                 }
                 break;
             case CHASE:
-                // Accelerate smoothly toward chase speed
-                if (fSpeed < CHASE_SPEED) fSpeed = Math.min(fSpeed + 0.02f, CHASE_SPEED); // slower ramp-up too
+                if (fSpeed < CHASE_SPEED) fSpeed = Math.min(fSpeed + 0.02f, CHASE_SPEED);
                 if (dist > LOSE_TILES * ts) {
                     state  = State.PATROL;
                     fSpeed = PATROL_SPEED;
-                    accumX = 0; accumY = 0; // clear stale float accumulator
+                    direction = "left";
                 }
                 break;
         }
 
-        // ── Movement ─────────────────────────────────────────────────────
+        // ── Movement ──────────────────────────────────────────────────────
         if (state == State.PATROL) {
-            // Collision-aware left/right patrol — never drifts into water
+            // Simple left/right patrol with collision awareness
+            direction   = direction.equals("left") ? "left" : "right";
             collisionOn = false;
             gp.collisionChecker.checkTile(this);
             if (collisionOn) {
                 direction = direction.equals("left") ? "right" : "left";
             } else {
-                worldX += direction.equals("left") ? -(int)fSpeed : (int)fSpeed;
+                worldX += direction.equals("left") ? -(int) fSpeed : (int) fSpeed;
             }
+            dir8 = direction;
 
-        } else if (state == State.CHASE) {
-            // Full 4-directional chase using float accumulator
-            float dx = px - ex;
-            float dy = py - ey;
-            float len = (float)Math.sqrt(dx*dx + dy*dy);
+        } else if (state == State.CHASE && fSpeed > 0) {
+            // True Euclidean chase — normalise vector and accumulate sub-pixels
+            float len = (float) dist;
             if (len > 0) {
-                dx /= len; dy /= len;
+                float nx = rawDx / len;
+                float ny = rawDy / len;
+
+                // Pick sprite direction from the actual movement vector
+                dir8 = toDir8(nx, ny);
+
+                accumX += nx * fSpeed;
+                accumY += ny * fSpeed;
+
+                int moveX = (int) accumX;
+                int moveY = (int) accumY;
+                accumX -= moveX;
+                accumY -= moveY;
+
+                // Move X — set cardinal direction for collision checker
+                if (moveX != 0) {
+                    direction   = moveX < 0 ? "left" : "right";
+                    collisionOn = false;
+                    gp.collisionChecker.checkTile(this);
+                    if (!collisionOn) worldX += moveX;
+                }
+                // Move Y — separate axis so diagonals slide along walls
+                if (moveY != 0) {
+                    direction   = moveY < 0 ? "up" : "down";
+                    collisionOn = false;
+                    gp.collisionChecker.checkTile(this);
+                    if (!collisionOn) worldY += moveY;
+                }
             }
-
-            accumX += dx * fSpeed;
-            accumY += dy * fSpeed;
-
-            int moveX = (int)accumX;
-            int moveY = (int)accumY;
-            accumX -= moveX;
-            accumY -= moveY;
-
-            // Update direction for sprite
-            if (Math.abs(dx) >= Math.abs(dy)) direction = dx < 0 ? "left" : "right";
-            else                               direction = dy < 0 ? "up"   : "down";
-
-            // Move X with collision
-            if (moveX != 0) {
-                direction = moveX < 0 ? "left" : "right";
-                collisionOn = false;
-                gp.collisionChecker.checkTile(this);
-                if (!collisionOn) worldX += moveX;
-            }
-            // Move Y with collision
-            if (moveY != 0) {
-                direction = moveY < 0 ? "up" : "down";
-                collisionOn = false;
-                gp.collisionChecker.checkTile(this);
-                if (!collisionOn) worldY += moveY;
-            }
-
-            // Restore dominant direction for sprite after collision checks
-            if (Math.abs(dx) >= Math.abs(dy)) direction = dx < 0 ? "left" : "right";
-            else                               direction = dy < 0 ? "up"   : "down";
         }
 
-        // ── Animate ──────────────────────────────────────────────────────
+        // ── Animate ───────────────────────────────────────────────────────
         spriteCounter++;
         if (spriteCounter > 4) {
-            spriteNum     = (spriteNum % FRAME_COUNT) + 1;
+            spriteNum     = (spriteNum % FC) + 1;
             spriteCounter = 0;
         }
     }
@@ -192,56 +177,57 @@ public class HornetEnemy extends Entity {
         int drawX = worldX - gp.camX;
         int drawY = worldY - gp.camY;
 
-        if (drawX + gp.tileSize < 0 || drawX > gp.screenWidth  ||
+        if (drawX + gp.tileSize < 0 || drawX > gp.screenWidth ||
             drawY + gp.tileSize < 0 || drawY > gp.screenHeight) return;
 
-        // ── Sprite ───────────────────────────────────────────────────────
-        BufferedImage[] frames = switch (direction) {
-            case "left"  -> framesRight;
-            case "up"    -> framesDown;
-            case "down"  -> framesUp;
-            default      -> framesLeft;
-        };
+        // Pick sprite array from 8-dir label
+        BufferedImage[] frames = dir8.equals("left") ? frLeft : frRight;
 
-        BufferedImage img = (frames != null && frames[spriteNum-1] != null)
-                ? frames[spriteNum-1] : null;
+        BufferedImage img = (frames != null && frames[spriteNum - 1] != null)
+                ? frames[spriteNum - 1] : null;
 
-        if (img != null) {
-            g2.drawImage(img, drawX, drawY, null);
-        } else {
+        if (img != null) g2.drawImage(img, drawX, drawY, null);
+        else {
             g2.setColor(Color.ORANGE);
-            g2.fillRect(drawX+4, drawY+4, gp.tileSize-8, gp.tileSize-8);
+            g2.fillRect(drawX + 4, drawY + 4, gp.tileSize - 8, gp.tileSize - 8);
         }
 
-        // ── View ring (patrol only) ───────────────────────────────────────
+        int cx = drawX + gp.tileSize / 2;
+        int cy = drawY + gp.tileSize / 2;
+
+        // ── Patrol: black view ring ───────────────────────────────────────
         if (state == State.PATROL) {
-            int cx = drawX + gp.tileSize/2;
-            int cy = drawY + gp.tileSize/2;
-            int r  = VIEW_TILES * gp.tileSize;
-            g2.setColor(new Color(255, 140, 0, 30));
-            g2.fillOval(cx-r, cy-r, r*2, r*2);
-            g2.setColor(new Color(255, 140, 0, 100));
-            g2.setStroke(new BasicStroke(1.5f));
-            g2.drawOval(cx-r, cy-r, r*2, r*2);
+            int r = VIEW_TILES * gp.tileSize;
+            g2.setColor(new Color(0, 0, 0, 40));
+            g2.fillOval(cx - r, cy - r, r * 2, r * 2);
+            g2.setColor(new Color(0, 0, 0, 140));
+            g2.setStroke(new BasicStroke(2f));
+            g2.drawOval(cx - r, cy - r, r * 2, r * 2);
             g2.setStroke(new BasicStroke(1f));
         }
 
-        // ── Alert flash ───────────────────────────────────────────────────
+        // ── Alerted: exclamation mark ─────────────────────────────────────
         if (state == State.ALERTED && (alertTimer / 10) % 2 == 0) {
-            g2.setFont(new Font("Arial", Font.BOLD, 32));
-            g2.setColor(Color.ORANGE);
-            int cx = drawX + gp.tileSize/2;
-            g2.drawString("!", cx - 8, drawY - 6);
+            g2.setFont(new Font("Arial", Font.BOLD, 34));
+            g2.setColor(Color.WHITE);
+            g2.drawString("!", cx - 6, drawY - 8);
+            g2.setColor(Color.BLACK);
+            g2.setFont(new Font("Arial", Font.BOLD, 34));
+            // thin outline for readability
+            g2.drawString("!", cx - 7, drawY - 7);
         }
 
-        // ── Chase glow ────────────────────────────────────────────────────
+        // ── Chase: pulsing semi-transparent black shrink/expand circle ────
         if (state == State.CHASE) {
-            float alpha = (float)(0.2 + 0.15 * Math.sin(System.currentTimeMillis() / 120.0));
-            int cx = drawX + gp.tileSize/2;
-            int cy = drawY + gp.tileSize/2;
-            int r  = gp.tileSize/2 + 8;
-            g2.setColor(new Color(1f, 0.5f, 0f, alpha));
-            g2.fillOval(cx-r, cy-r, r*2, r*2);
+            double pulse = Math.sin(System.currentTimeMillis() / 200.0); // -1..1
+            int baseR = gp.tileSize;
+            int r     = baseR + (int)(pulse * (gp.tileSize / 3));       // shrinks and expands
+            g2.setColor(new Color(0, 0, 0, 60));
+            g2.fillOval(cx - r, cy - r, r * 2, r * 2);
+            g2.setColor(new Color(0, 0, 0, 120));
+            g2.setStroke(new BasicStroke(1.5f));
+            g2.drawOval(cx - r, cy - r, r * 2, r * 2);
+            g2.setStroke(new BasicStroke(1f));
         }
     }
 }
