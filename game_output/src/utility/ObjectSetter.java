@@ -4,6 +4,7 @@ import main.GamePanel;
 import object.OBJ_boots;
 import object.OBJ_door;
 import object.OBJ_key;
+import object.OBJ_health;
 import object.OBJ_treasure_box;
 
 public class ObjectSetter {
@@ -14,15 +15,6 @@ public class ObjectSetter {
         this.gp = gp;
     }
     public void setObject(){
-
-
-// | Value | Coordinates (Row, Column) |
-// |-------|----------------------------|
-// | **10** | (17, 30)                  |
-// | **11** | (8, 14)                   |
-// | **12** | (2, 42), (48, 25)         |
-// | **13** | (2, 2)                    |
-
 
         gp.obj[0] = new OBJ_key();
         gp.obj[0].worldX = gp.tileSize * 23;
@@ -56,6 +48,12 @@ public class ObjectSetter {
         gp.obj[7].worldX = gp.tileSize * 30;
         gp.obj[7].worldY = gp.tileSize * 8;
 
+        gp.obj[8] = new OBJ_health();
+        gp.obj[8].worldX = gp.tileSize * 10;
+        gp.obj[8].worldY = gp.tileSize * 10;
 
+        gp.obj[9] = new OBJ_health();
+        gp.obj[9].worldX = gp.tileSize * 37;
+        gp.obj[9].worldY = gp.tileSize * 28;
     }
 }

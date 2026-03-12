@@ -11,6 +11,7 @@ import javax.swing.JPanel;
 
 import entity.Enemy;
 import entity.HornetEnemy;
+import entity.Porcupine;
 import entity.Player;
 import object.SuperObject;
 import tiles.TileManager;
@@ -44,10 +45,12 @@ public class GamePanel extends JPanel implements Runnable {
     private final BufferedImage gameBuffer; // Offscreen canvas — created once
 
     // ===== GAME STATES =====
-    public static final int STATE_LOADING = 0;
-    public static final int STATE_TITLE   = 1;
-    public static final int STATE_PLAYING = 2;
+    public static final int STATE_LOADING    = 0;
+    public static final int STATE_TITLE     = 1;
+    public static final int STATE_PLAYING   = 2;
+    public static final int STATE_MAP_SELECT = 3;
     public int gameState = STATE_LOADING;
+    public String selectedMap = "map_02";
 
     // ===== SYSTEMS =====
     KeyHandler keyH                          = new KeyHandler();
@@ -60,8 +63,10 @@ public class GamePanel extends JPanel implements Runnable {
     // ===== ENEMIES =====
     public Enemy[]        enemies  = new Enemy[5];
     public HornetEnemy[]   hornets  = new HornetEnemy[2];   // Tracking hornets
+    public Porcupine[]     porcupines = new Porcupine[3];       // Stationary shooters
 
     private boolean restartHandled = false;
+    public int playerHealth = 100; // 0-100, each thorn = -20
     public Thread gameThread;
     public GameUI gameUI = new GameUI(this);
 
@@ -104,6 +109,10 @@ public class GamePanel extends JPanel implements Runnable {
         enemies[3] = new Enemy(this, 20,  7);
         enemies[4] = new Enemy(this, 22, 37);
 
+        // Porcupines — verified walkable land, far from player spawn (23,21)
+        porcupines[0] = new Porcupine(this, 40,  8); // top-right road  (dist=30)
+        porcupines[1] = new Porcupine(this, 37, 37); // bottom-right grass (dist=30)
+        porcupines[2] = new Porcupine(this, 38, 41); // bottom-right grass (dist=35)
 
         // Hornets — placed on open land far from player spawn (23,21)
         hornets[0] = new HornetEnemy(this, 39,  9); // top-right road corridor
@@ -113,12 +122,16 @@ public class GamePanel extends JPanel implements Runnable {
     private void resetGame() {
         for (int i = 0; i < obj.length;     i++) obj[i]     = null;
         for (int i = 0; i < enemies.length;  i++) enemies[i]  = null;
-        for (int i = 0; i < hornets.length;  i++) hornets[i]  = null;
+        for (int i = 0; i < hornets.length;     i++) hornets[i]     = null;
+        for (int i = 0; i < porcupines.length; i++) porcupines[i] = null;
         player.setDefaultValues();
         player.hasKey        = 0;
         gameUI.playTime      = 0;
         gameUI.GameOver      = false;
         gameUI.enemyGameOver = false;
+        gameUI.thornGameOver = false;
+        playerHealth = 100;
+        player.treasuresFound = 0;
         setupGame();
         playSound(5);
     }
@@ -182,8 +195,30 @@ public class GamePanel extends JPanel implements Runnable {
         if (gameState == STATE_TITLE) {
             if (keyH.enterPressed && !restartHandled) {
                 restartHandled = true;
-                gameState = STATE_PLAYING;
+                gameState = STATE_MAP_SELECT;
+            }
+            if (!keyH.enterPressed) restartHandled = false;
+            return;
+        }
+
+        if (gameState == STATE_MAP_SELECT) {
+            gameUI.handleMapSelect(keyH);
+            if (keyH.enterPressed && !restartHandled) {
+                restartHandled = true;
+                tileM.loadMap(selectedMap);
+                setupGame();
                 playSound(5);
+                gameState = STATE_PLAYING;
+            }
+            if (!keyH.enterPressed) restartHandled = false;
+            return;
+        }
+
+        if (gameUI.thornGameOver) {
+            if (keyH.enterPressed && !restartHandled) {
+                restartHandled = true;
+                stopSound(5);
+                gameState = STATE_MAP_SELECT;
             }
             if (!keyH.enterPressed) restartHandled = false;
             return;
@@ -193,8 +228,7 @@ public class GamePanel extends JPanel implements Runnable {
             if (keyH.enterPressed && !restartHandled) {
                 restartHandled = true;
                 stopSound(5);
-                resetGame();
-                gameState = STATE_PLAYING;
+                gameState = STATE_MAP_SELECT;
             }
             if (!keyH.enterPressed) restartHandled = false;
             return;
@@ -204,8 +238,7 @@ public class GamePanel extends JPanel implements Runnable {
             if (keyH.enterPressed && !restartHandled) {
                 restartHandled = true;
                 stopSound(5);
-                resetGame();
-                gameState = STATE_PLAYING;
+                gameState = STATE_MAP_SELECT;
             }
             if (!keyH.enterPressed) restartHandled = false;
             return;
@@ -214,12 +247,32 @@ public class GamePanel extends JPanel implements Runnable {
         restartHandled = false;
         player.update();
         for (Enemy e          : enemies)  { if (e != null) e.update(); }
-        for (HornetEnemy h    : hornets)  { if (h != null) h.update(); }
+        for (HornetEnemy h    : hornets)     { if (h != null) h.update(); }
+        for (Porcupine p      : porcupines) { if (p != null) p.update(); }
 
-        if (collisionChecker.checkEnemyContact(enemies) ||
-            collisionChecker.checkHornetContact(hornets)) {
-            stopSound(5);
-            gameUI.enemyGameOver = true;
+        // Check thorn hits
+        boolean thornHit = false;
+        for (Porcupine p : porcupines) { if (p != null && p.thornHitsPlayer()) { thornHit = true; break; } }
+
+        if (thornHit) {
+            playerHealth -= 20;
+            gameUI.triggerHitEffect();
+            if (playerHealth <= 0) {
+                stopSound(5);
+                gameUI.thornGameOver = true;
+            }
+        }
+
+        boolean enemyContact = collisionChecker.checkEnemyContact(enemies) ||
+                              collisionChecker.checkHornetContact(hornets);
+        if (enemyContact && !player.isInvincible()) {
+            playerHealth -= 30;
+            gameUI.triggerHitEffect();
+            player.startInvincibility(); // 5s cooldown
+            if (playerHealth <= 0) {
+                stopSound(5);
+                gameUI.enemyGameOver = true;
+            }
         }
 
         updateCamera();
@@ -243,11 +296,16 @@ public class GamePanel extends JPanel implements Runnable {
                 tileM.draw(g2);
                 gameUI.drawTitleScreen(g2);
                 break;
+            case STATE_MAP_SELECT:
+                gameUI.drawMapSelectScreen(g2);
+                break;
+
             default:
                 tileM.draw(g2);
                 for (SuperObject o : obj)     { if (o != null) o.draw(g2, this); }
                 for (Enemy e       : enemies)  { if (e != null) e.draw(g2); }
-                for (HornetEnemy h  : hornets)  { if (h != null) h.draw(g2); }
+                for (HornetEnemy h  : hornets)     { if (h != null) h.draw(g2); }
+                for (Porcupine p   : porcupines)  { if (p != null) p.draw(g2); }
                 player.draw(g2);
                 gameUI.draw(g2);
                 break;

@@ -24,11 +24,17 @@ public class Player extends Entity {
 
     boolean isMoving = false;
     public int hasKey = 0;
+    public int treasuresFound = 0;
+    public boolean hasGrandKey = false;
 
     // ===== Speed Boost =====
     private int bootCounter = 0;
     private final int speedBoostDuration = 900;
     private boolean speedBoostActive = false;
+
+    // ── Dragonfly damage invincibility (5s = 1000 frames at 200fps) ────────
+    private int  invincibleTimer   = 0;
+    private static final int INVINCIBLE_DURATION = 1000;
 
     public Player(GamePanel gp, KeyHandler keyH) {
         this.gp   = gp;
@@ -76,6 +82,8 @@ public class Player extends Entity {
     }
 
     public void setDefaultValues() {
+        hasGrandKey = false;
+        treasuresFound = 0;
         worldX = gp.tileSize * 23;
         worldY = gp.tileSize * 21;
         Speed  = 1.0f;
@@ -112,6 +120,9 @@ public class Player extends Entity {
             spriteNum = 0;
         }
 
+        // Invincibility countdown
+        if (invincibleTimer > 0) invincibleTimer--;
+
         if (speedBoostActive) {
             bootCounter++;
             if (bootCounter > speedBoostDuration) {
@@ -133,6 +144,15 @@ public class Player extends Entity {
                     hasKey++;
                     gp.gameUI.showMessage("You picked up a key!", Color.YELLOW);
                     break;
+                case "Grand Door":
+                    if (hasGrandKey) {
+                        gp.playSE(0);
+                        gp.obj[objIndex] = null;
+                        gp.gameUI.showMessage("The Grand Gate opens!", java.awt.Color.YELLOW);
+                    } else {
+                        gp.gameUI.showMessage("You need the Grand Key!", java.awt.Color.RED);
+                    }
+                    break;
                 case "Door":
                     if (hasKey > 0) {
                         gp.playSE(0);
@@ -142,6 +162,18 @@ public class Player extends Entity {
                     } else {
                         gp.gameUI.showMessage("You need a key to open this door.", Color.RED);
                     }
+                    break;
+                case "Health":
+                    gp.playerHealth = Math.min(100, gp.playerHealth + 50);
+                    gp.obj[objIndex] = null;
+                    gp.playSE(3); // same sound as boots
+                    gp.gameUI.showMessage("Health +50%!", java.awt.Color.GREEN);
+                    break;
+                case "Grand Key":
+                    hasGrandKey = true;
+                    gp.obj[objIndex] = null;
+                    gp.playSE(2);
+                    gp.gameUI.showMessage("You found the GRAND KEY!", java.awt.Color.YELLOW);
                     break;
                 case "Boots":
                     gp.playSE(3);
@@ -186,7 +218,9 @@ public class Player extends Entity {
         g2.drawImage(image, drawX, drawY, null); // 1:1 — already pre-scaled at load
     }
 
-    public boolean isSpeedBoostActive() { return speedBoostActive; }
+    public boolean isSpeedBoostActive()  { return speedBoostActive; }
+    public boolean isInvincible()         { return invincibleTimer > 0; }
+    public void    startInvincibility()   { invincibleTimer = INVINCIBLE_DURATION; }
     public int getBootCounter()          { return bootCounter; }
     public int getSpeedBoostDuration()   { return speedBoostDuration; }
 }
